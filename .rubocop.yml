@@ -1,0 +1,18 @@
+inherit_from:
+  - .rubocop_airbnb.yml
+  - .rubocop_performance.yml
+  - .rubocop_rails.yml
+  - .rubocop_rspec.yml
+
+AllCops:
+  Exclude:
+    - "bin/*"
+    - "node_modules/**/*"
+    - "vendor/bundle/**/*"
+    - "db/**/*"
+    - "spec/spec_helper.rb"
+    - "app/views/**/*"
+    - "config/initializers/**/*"
+
+Metrics/LineLength:
+  IgnoredPatterns: ['\A\s*#']

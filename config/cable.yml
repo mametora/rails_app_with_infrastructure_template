@@ -1,0 +1,14 @@
+default: &default
+  adapter: redis
+  url: <%= "redis://#{ENV['KVS_HOST']}:6379/1" %>
+
+development:
+  <<: *default
+  channel_prefix: my_app_development
+
+test:
+  adapter: test
+
+production:
+  <<: *default
+  channel_prefix: my_app_production

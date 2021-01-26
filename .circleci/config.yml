@@ -1,0 +1,447 @@
+version: 2.1
+
+references:
+  docker_hub_authentication: &docker_hub_authentication
+    auth:
+      username: $DOCKERHUB_USERNAME
+      password: $DOCKERHUB_PASSWORD
+
+orbs:
+  aws-cli: circleci/aws-cli@1.3.1
+  aws-ecr: circleci/aws-ecr@6.14.0
+  aws-ecs: circleci/aws-ecs@1.4.0
+  slack: circleci/slack@4.1.3
+
+executors:
+  app_with_db:
+    docker:
+      - image: circleci/ruby:2.7.1-node-browsers
+        <<: *docker_hub_authentication
+        environment:
+          BUNDLER_VERSION: 2.1.4
+          BUNDLE_JOBS: 3
+          BUNDLE_RETRY: 3
+          BUNDLE_PATH: vendor/bundle
+          RAILS_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_USER: root
+          DB_PASSWORD: ""
+          KVS_HOST: 127.0.0.1
+      - image: circleci/mysql:5.7
+        <<: *docker_hub_authentication
+        environment:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      - image: circleci/redis
+        <<: *docker_hub_authentication
+  app_without_db:
+    docker:
+      - image: circleci/ruby:2.7.1-node-browsers
+        <<: *docker_hub_authentication
+        environment:
+          BUNDLER_VERSION: 2.1.4
+          BUNDLE_JOBS: 3
+          BUNDLE_RETRY: 3
+          BUNDLE_PATH: vendor/bundle
+  deploy:
+    docker:
+      - image: circleci/python:3.7.1
+        <<: *docker_hub_authentication
+
+commands:
+  install_dependencies:
+    description: Install dependencies.
+    steps:
+      - run:
+          name: Update bundler
+          command: gem update bundler
+      - restore_cache:
+          keys:
+            - my_app-bundle-v1-{{ checksum "Gemfile.lock" }}
+            - my_app-bundle-v1-
+      - run:
+          name: Bundle install
+          command: bundle check || bundle install --clean
+      - save_cache:
+          key: my_app-bundle-v1-{{ checksum "Gemfile.lock" }}
+          paths:
+            - vendor/bundle
+      - restore_cache:
+          keys:
+            - my_app-yarn-v1-{{ checksum "yarn.lock" }}
+            - my_app-yarn-v1-
+      - run:
+          name: Yarn install
+          command: yarn install --cache-folder ~/.cache/yarn --frozen-lockfile
+      - save_cache:
+          key: my_app-yarn-v1-{{ checksum "yarn.lock" }}
+          paths:
+            - ~/.cache/yarn
+
+jobs:
+  rubocop:
+    executor: app_without_db
+    steps:
+      - checkout
+      - install_dependencies
+      - run:
+          name: Rubocop
+          command: bundle exec rubocop
+  rails_best_practices:
+    executor: app_without_db
+    steps:
+      - checkout
+      - install_dependencies
+      - run:
+          name: Rails Best Practices
+          command: bundle exec rails_best_practices .
+  brakeman:
+    executor: app_without_db
+    steps:
+      - checkout
+      - install_dependencies
+      - run:
+          name: Brakeman
+          command: bundle exec brakeman -z
+  rspec:
+    executor: app_with_db
+    parallelism: 1
+    steps:
+      - checkout
+      - install_dependencies
+      - run:
+          name: Webpacker compile
+          command: bundle exec rails webpacker:compile
+      - run:
+          name: Wait for DB
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Database setup
+          command: bundle exec rails db:schema:load --trace
+      - run: |
+          bundle exec rspec --profile 10 \
+                            --format RspecJunitFormatter \
+                            --out test_results/rspec.xml \
+                            --format progress \
+                            --force-color \
+                            $(circleci tests glob "spec/**/*_spec.rb" | circleci tests split --split-by=timings)
+      - store_test_results:
+          path: test_results
+      - store_artifacts:
+          path: coverage
+  build:
+    executor: deploy
+    parameters:
+      env:
+        type: enum
+        enum:
+          - stg
+          - prod
+    steps:
+      - aws-ecr/build-and-push-image:
+          repo: '${APP_NAME}-<< parameters.env >>-rails'
+          attach-workspace: true
+          setup-remote-docker: true
+          tag: 'latest,${CIRCLE_SHA1}'
+          extra-build-args: '--build-arg RAILS_ENV=production --build-arg NODE_ENV=production --build-arg RAILS_MASTER_KEY=${RAILS_MASTER_KEY}'
+          remote-docker-layer-caching: true
+  migrate:
+    executor: deploy
+    parameters:
+      env:
+        type: enum
+        enum:
+          - stg
+          - prod
+      subnet_ids:
+        type: string
+      security_group_ids:
+        type: string
+    steps:
+      - aws-cli/setup:
+          aws-region: AWS_REGION
+      - aws-ecs/run-task:
+          cluster: '${APP_NAME}-<< parameters.env >>'
+          task-definition: '${APP_NAME}-<< parameters.env >>-migration'
+          subnet-ids: '<< parameters.subnet_ids >>'
+          security-group-ids: '<< parameters.security_group_ids >>'
+  deploy:
+    executor: deploy
+    parameters:
+      env:
+        type: enum
+        enum:
+          - stg
+          - prod
+      family:
+        type: string
+    steps:
+      - aws-cli/setup:
+          aws-region: AWS_REGION
+      - aws-ecs/update-service:
+          cluster-name: '${APP_NAME}-<< parameters.env >>'
+          family: '${APP_NAME}-<< parameters.env >>-<< parameters.family >>'
+          container-image-name-updates: 'container=${APP_NAME}-<< parameters.env >>-<< parameters.family >>,tag=${CIRCLE_SHA1}'
+          verify-revision-is-deployed: true
+      - slack/notify:
+          channel: 'my-app-notification'
+          event: fail
+          custom: |
+            {
+            	"blocks": [
+                    {
+                        "type": "header",
+                        "text": {
+            				"type": "plain_text",
+            				"text": "Deployment has failed :warning:",
+            				"emoji": true
+            			}
+                    },
+            		{
+            			"type": "section",
+            			"fields": [
+                            {
+                                "type": "mrkdwn",
+                                "text": "*Env*:\n<< parameters.env >>"
+                            },
+            				{
+            					"type": "mrkdwn",
+            					"text": "*Family*:\n<< parameters.family >>"
+            				},
+            				{
+            					"type": "mrkdwn",
+            					"text": "*Commiter*:\n${CIRCLE_USERNAME}"
+            				},
+            				{
+            					"type": "mrkdwn",
+            					"text": "*SHA*:\n${CIRCLE_SHA1}"
+            				}
+            			],
+            			"accessory": {
+            				"type": "image",
+            				"image_url": "https://assets.brandfolder.com/otz5mn-bw4j2w-6jzqo8/original/circle-logo-badge-black.png",
+            				"alt_text": "CircleCI logo"
+            			}
+            		},
+            		{
+            			"type": "actions",
+            			"elements": [
+            				{
+            					"type": "button",
+            					"text": {
+            						"type": "plain_text",
+            						"text": "View Job"
+            					},
+            					"url": "${CIRCLE_BUILD_URL}"
+            				}
+            			]
+            		}
+            	]
+            }
+
+  notify:
+    executor: deploy
+    parameters:
+      env:
+        type: enum
+        enum:
+          - stg
+          - prod
+    steps:
+      - slack/notify:
+          channel: 'my-app-notification'
+          event: pass
+          custom: |
+            {
+            	"blocks": [
+            		{
+            			"type": "header",
+            			"text": {
+            				"type": "plain_text",
+            				"text": "Deployment Successful! :tada:",
+            				"emoji": true
+            			}
+            		},
+            		{
+            			"type": "section",
+            			"fields": [
+            				{
+            					"type": "mrkdwn",
+            					"text": "*Env*:\n<< parameters.env >>"
+            				},
+            				{
+            					"type": "mrkdwn",
+            					"text": "*When*:\n$(date +'%m/%d/%Y %T')"
+            				},
+            				{
+            					"type": "mrkdwn",
+            					"text": "*Commiter*:\n${CIRCLE_USERNAME}"
+            				},
+            				{
+            					"type": "mrkdwn",
+            					"text": "*SHA*:\n${CIRCLE_SHA1}"
+            				}
+            			],
+            			"accessory": {
+            				"type": "image",
+            				"image_url": "https://assets.brandfolder.com/otz5mn-bw4j2w-6jzqo8/original/circle-logo-badge-black.png",
+            				"alt_text": "CircleCI logo"
+            			}
+            		},
+            		{
+            			"type": "actions",
+            			"elements": [
+            				{
+            					"type": "button",
+            					"text": {
+            						"type": "plain_text",
+            						"text": "View Job"
+            					},
+            					"url": "${CIRCLE_BUILD_URL}"
+            				}
+            			]
+            		}
+            	]
+            }
+
+workflows:
+  version: 2
+  my_app-workflow:
+    jobs:
+      - rubocop:
+          context: DockerHub
+      - rails_best_practices:
+          context: DockerHub
+      - brakeman:
+          context: DockerHub
+      - rspec:
+          context: DockerHub
+      # staging deployment
+      - build:
+          name: build-stg
+          context: DockerHub
+          env: stg
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - rubocop
+            - rails_best_practices
+            - brakeman
+            - rspec
+      - migrate:
+          name: migrate-stg
+          context: DockerHub
+          env: stg
+          subnet_ids: 'subnet-xxxxxxxxxxxxxxxxx,subnet-xxxxxxxxxxxxxxxxx,subnet-xxxxxxxxxxxxxxxxx'
+          security_group_ids: 'sg-xxxxxxxxxxxxxxxxx,sg-xxxxxxxxxxxxxxxxx'
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - build-stg
+      - deploy:
+          name: deploy-rails-stg
+          context:
+            - DockerHub
+            - slack-secrets
+          env: stg
+          family: rails
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - migrate-stg
+      - deploy:
+          name: deploy-sidekiq-stg
+          context:
+            - DockerHub
+            - slack-secrets
+          env: stg
+          family: sidekiq
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - migrate-stg
+      - notify:
+          name: notify-stg
+          context:
+            - DockerHub
+            - slack-secrets
+          env: stg
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - deploy-rails-stg
+            - deploy-sidekiq-stg
+      # production deployment
+      - build:
+          name: build-prod
+          context: DockerHub
+          env: prod
+          filters:
+            branches:
+              only:
+                - main
+          requires:
+            - rubocop
+            - rails_best_practices
+            - brakeman
+            - rspec
+      - migrate:
+          name: migrate-prod
+          context: DockerHub
+          env: prod
+          subnet_ids: 'subnet-xxxxxxxxxxxxxxxxx,subnet-xxxxxxxxxxxxxxxxx,subnet-xxxxxxxxxxxxxxxxx'
+          security_group_ids: 'sg-xxxxxxxxxxxxxxxxx,sg-xxxxxxxxxxxxxxxxx'
+          filters:
+            branches:
+              only:
+                - main
+          requires:
+            - build-prod
+      - deploy:
+          name: deploy-rails-prod
+          context:
+            - DockerHub
+            - slack-secrets
+          env: prod
+          family: rails
+          filters:
+            branches:
+              only:
+                - main
+          requires:
+            - migrate-prod
+      - deploy:
+          name: deploy-sidekiq-prod
+          context:
+            - DockerHub
+            - slack-secrets
+          env: prod
+          family: sidekiq
+          filters:
+            branches:
+              only:
+                - main
+          requires:
+            - migrate-prod
+      - notify:
+          name: notify-prod
+          context:
+            - DockerHub
+            - slack-secrets
+          env: prod
+          filters:
+            branches:
+              only:
+                - main
+          requires:
+            - deploy-rails-prod
+            - deploy-sidekiq-prod

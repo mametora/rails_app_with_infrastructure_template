@@ -1,0 +1,15 @@
+.bundle
+.dockerignore
+.env
+.env.*
+.git
+.circleci
+node_modules
+public/uploads
+public/system
+public/assets
+public/packs
+vendor/bundle
+coverage
+terraform
+erd.pdf

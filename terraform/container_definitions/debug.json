@@ -1,0 +1,69 @@
+[
+  {
+    "name": "${app}-${workspace}-rails",
+    "image": "${aws_account_id}.dkr.ecr.ap-northeast-1.amazonaws.com/${app}-${workspace}-rails:latest",
+    "essential": true,
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-region": "${region}",
+        "awslogs-group": "${log_group}",
+        "awslogs-stream-prefix": "rails"
+      }
+    },
+    "memory": 900,
+    "command": [
+      "/bin/sh",
+      "-c",
+      "tail -f /dev/null"
+    ],
+    "secrets": [
+      {
+        "name": "RAILS_MASTER_KEY",
+        "valueFrom": "/${workspace}/rails/master_key"
+      },
+      {
+        "name": "WEB_HOST",
+        "valueFrom": "/${workspace}/web_host"
+      },
+      {
+        "name": "DB_HOST",
+        "valueFrom": "/${workspace}/db/host"
+      },
+      {
+        "name": "DB_USER",
+        "valueFrom": "/${workspace}/db/user"
+      },
+      {
+        "name": "DB_PASSWORD",
+        "valueFrom": "/${workspace}/db/password"
+      },
+      {
+        "name": "KVS_HOST",
+        "valueFrom": "/${workspace}/kvs/host"
+      },
+      {
+        "name": "BUCKET",
+        "valueFrom": "/${workspace}/bucket"
+      }
+    ],
+    "environment": [
+      {
+        "name": "RAILS_ENV",
+        "value": "production"
+      },
+      {
+        "name": "RAILS_SERVE_STATIC_FILES",
+        "value": "true"
+      },
+      {
+        "name": "RAILS_LOG_TO_STDOUT",
+        "value": "true"
+      },
+      {
+        "name": "AWS_REGION",
+        "value": "${region}"
+      }
+    ]
+  }
+]
