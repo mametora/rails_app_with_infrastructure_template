@@ -15,6 +15,7 @@ gem 'bootsnap', '>= 1.4.2', require: false
 gem 'sidekiq'
 gem 'aws-sdk-rails', '~> 3'
 gem 'aws-sdk-s3', '~> 1'
+gem 'sitemap_generator'
 gem 'lograge'
 gem 'actionpack-cloudfront'
 

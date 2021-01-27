@@ -298,6 +298,8 @@ GEM
       simplecov_json_formatter (~> 0.1)
     simplecov-html (0.12.3)
     simplecov_json_formatter (0.1.2)
+    sitemap_generator (6.1.2)
+      builder (~> 3.0)
     spring (2.1.1)
     spring-watcher-listen (2.0.1)
       listen (>= 2.7, < 4.0)
@@ -366,6 +368,7 @@ DEPENDENCIES
   sass-rails (>= 6)
   sidekiq
   simplecov
+  sitemap_generator
   spring
   spring-watcher-listen (~> 2.0.0)
   tzinfo-data

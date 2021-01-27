@@ -24,3 +24,17 @@ resource "aws_s3_bucket" "default" {
     Product = var.app_name
   }
 }
+
+data "template_file" "s3_bucket_default_policy" {
+  template = file("./bucket_policies/default.json")
+
+  vars = {
+    aws_cloudfront_origin_access_identity_id = aws_cloudfront_origin_access_identity.default.id
+    bucket_arn                               = aws_s3_bucket.default.arn
+  }
+}
+
+resource "aws_s3_bucket_policy" "default" {
+  bucket = aws_s3_bucket.default.id
+  policy = data.template_file.s3_bucket_default_policy.rendered
+}
