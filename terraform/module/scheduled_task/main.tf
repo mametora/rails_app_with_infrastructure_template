@@ -42,6 +42,7 @@ output "task_arn" {
 
 module "scheduled_task" {
   source              = "baikonur-oss/fargate-scheduled-task/aws"
+  version             = "v2.0.3"
   name                = var.family
   schedule_expression = var.schedule_expression
   is_enabled          = true
@@ -52,4 +53,5 @@ module "scheduled_task" {
   task_count          = 1
   subnet_ids          = var.subnet_ids
   security_group_ids  = var.security_group_ids
+  assign_public_ip    = false
 }
