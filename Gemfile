@@ -10,7 +10,7 @@ gem 'sass-rails', '>= 6'
 gem 'webpacker', '~> 4.0'
 gem 'jbuilder', '~> 2.7'
 gem 'redis', '~> 4.0'
-gem 'image_processing', '~> 1.2'
+gem 'image_processing', '~> 1.12'
 gem 'bootsnap', '>= 1.4.2', require: false
 gem 'sidekiq'
 gem 'aws-sdk-rails', '~> 3'
